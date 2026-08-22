@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gatefold"
+version = "0.1.0"
+description = "Framework-agnostic quantum circuit diagram plotting with matplotlib"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Faisal Alam", email = "mfalam2@illinois.edu" }]
+dependencies = ["matplotlib>=3.7"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gatefold"]
