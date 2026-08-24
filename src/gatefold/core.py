@@ -105,55 +105,116 @@ def _default_qubit_order(qubits) -> list[Qubit]:
 # wraps at whitespace like ordinary text.
 _WRAP_TOKEN = re.compile(r"\$[^$]*\$|\S+")
 
+# For width *estimation* only (see _fit_text): a LaTeX command (\dagger, \uparrow, ...) is one
+# rendered glyph, not one glyph per letter of its name; structural markup ($, ^, _, {, }) takes
+# no width of its own -- its operand's width is what matters, and that operand is counted
+# separately by this same pass.
+_LATEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
+_LATEX_STRUCTURAL = re.compile(r"[$^_{}]")
+
 
 def _tokenize_for_wrap(text: str) -> list[str]:
     return _WRAP_TOKEN.findall(text)
 
 
-def _wrap_tokens(probe, tokens: list[str], max_width_px: float) -> list[str]:
-    """Greedily pack tokens into lines, measuring each candidate line at probe's current fontsize."""
-    renderer = probe.figure.canvas.get_renderer()
+def _estimate_char_count(text: str) -> int:
+    """Rough visible-glyph count for a mathtext-ish string, for width *estimation* -- not
+    a substitute for measuring when the actual rendered width matters."""
+    return len(_LATEX_STRUCTURAL.sub("", _LATEX_COMMAND.sub("#", text)))
+
+
+def _text_width(probe, renderer, text: str) -> float:
+    probe.set_text(text)
+    return probe.get_window_extent(renderer=renderer).width
+
+
+def _pack_by_width(
+    tokens: list[str], widths: list[float], space_width: float, max_width_px: float
+) -> tuple[list[str], float]:
+    """Greedily pack tokens (with precomputed widths) into lines <= max_width_px.
+
+    Returns (lines, widest line's width) -- the caller already has per-token widths, so the
+    widest line's width comes for free without an extra measurement of the joined text.
+    """
     lines: list[str] = []
+    line_widths: list[float] = []
     current: list[str] = []
-    for tok in tokens:
-        candidate = " ".join([*current, tok])
-        probe.set_text(candidate)
-        width = probe.get_window_extent(renderer=renderer).width
-        if current and width > max_width_px:
+    current_width = 0.0
+    for tok, w in zip(tokens, widths):
+        candidate_width = w if not current else current_width + space_width + w
+        if current and candidate_width > max_width_px:
             lines.append(" ".join(current))
-            current = [tok]
+            line_widths.append(current_width)
+            current, current_width = [tok], w
         else:
             current.append(tok)
+            current_width = candidate_width
     if current:
         lines.append(" ".join(current))
+        line_widths.append(current_width)
+    return lines, (max(line_widths) if line_widths else 0.0)
+
+
+def _wrap_tokens(probe, tokens: list[str], max_width_px: float) -> list[str]:
+    """Greedily pack tokens into lines at probe's current fontsize (a single-fontsize
+    convenience around _pack_by_width; _fit_text itself measures once and reuses linearly
+    scaled widths across every fontsize it tries -- see _fit_text's docstring for why)."""
+    renderer = probe.figure.canvas.get_renderer()
+    if not tokens:
+        return []
+    widths = [_text_width(probe, renderer, tok) for tok in tokens]
+    space_width = _text_width(probe, renderer, " ")
+    lines, _ = _pack_by_width(tokens, widths, space_width, max_width_px)
     return lines
 
 
 def _fit_text(
-    ax, text: str, box_w_data: float, box_h_data: float, base_fs: float, min_fs: float = 5.0
+    ax, renderer, text: str, box_w_data: float, box_h_data: float, base_fs: float, min_fs: float = 5.0
 ) -> tuple[str, float]:
-    """Find the largest fontsize in [min_fs, base_fs] at which `text`, wrapped to fit
-    box_w_data, also fits box_h_data -- shrinking font and adding lines together rather
-    than shrinking a single line all the way to min_fs. Always returns something (the
-    min_fs attempt is used even if it still overflows vertically).
+    """Find a fontsize in [min_fs, base_fs] at which `text`, wrapped to fit box_w_data, also
+    fits box_h_data -- shrinking font and adding lines together rather than shrinking a single
+    line all the way to min_fs. Always returns something (the min_fs attempt is used even if
+    it still overflows vertically).
+
+    Takes an already-obtained `renderer` rather than drawing the canvas itself: plot_circuit
+    calls this once per item, and a fresh fig.canvas.draw() re-renders every artist already
+    placed on the axes so far, making that call alone scale with the number of items already
+    drawn -- one draw() up front in plot_circuit, reused here, avoids that entirely.
+
+    Matplotlib's renderer measures `text` exactly once per call, at base_fs; every token's
+    width (at every candidate fontsize the shrink search tries) is then an estimate --
+    proportional to its visible-glyph count (_estimate_char_count), calibrated against that
+    one real measurement -- not a further renderer call. Sizing here is deliberately
+    approximate, not pixel-exact: profiling found the auto-fit *search* itself (repeatedly
+    asking the renderer to measure candidate strings) costs several times more than actually
+    rendering the text, because each distinct mathtext string triggers matplotlib's
+    font_manager to score every installed system font (slow on a system with many fonts
+    installed, and evidently not fully amortized by matplotlib's own font cache across
+    distinct short strings within one process). One measurement per item, reused via a cheap
+    character-count estimate for every candidate size, avoids nearly all of that cost.
     """
-    fig = ax.figure
-    fig.canvas.draw()
     p0 = ax.transData.transform((0, 0))
     p1 = ax.transData.transform((box_w_data, box_h_data))
     box_w_px, box_h_px = abs(p1[0] - p0[0]), abs(p1[1] - p0[1])
 
     tokens = _tokenize_for_wrap(text)
     probe = ax.text(0, 0, text, fontsize=base_fs, ha="center", va="center", alpha=0)
-    renderer = fig.canvas.get_renderer()
+
+    ref_bbox = probe.get_window_extent(renderer=renderer)
+    token_char_counts = [_estimate_char_count(tok) for tok in tokens]
+    total_chars = sum(token_char_counts) or 1
+    px_per_char_ref = ref_bbox.width / total_chars
+    line_height_ref = ref_bbox.height
 
     fs = base_fs
     while True:
-        probe.set_fontsize(fs)
-        wrapped = "\n".join(_wrap_tokens(probe, tokens, box_w_px * 0.92))
-        probe.set_text(wrapped)
-        bbox = probe.get_window_extent(renderer=renderer)
-        if (bbox.width <= box_w_px * 0.92 and bbox.height <= box_h_px * 0.85) or fs <= min_fs:
+        scale = fs / base_fs
+        px_per_char = px_per_char_ref * scale
+        widths = [c * px_per_char for c in token_char_counts]
+        lines, max_line_width = _pack_by_width(tokens, widths, px_per_char, box_w_px * 0.92)
+        total_height = line_height_ref * scale * 1.2 * max(len(lines), 1)
+        if (max_line_width <= box_w_px * 0.92 and total_height <= box_h_px * 0.85) or fs <= min_fs:
+            wrapped = "\n".join(lines)
             break
         fs -= 0.5
     probe.remove()
@@ -200,6 +261,12 @@ def plot_circuit(
     ax.set_ylim(-(len(qubit_labels) - 1) - 0.8, 0.8)
     ax.axis("off")
 
+    # Drawn once here rather than inside _fit_text's per-item loop -- a fresh
+    # fig.canvas.draw() re-renders every artist already on the axes, which would make that
+    # call alone scale with the number of items already placed.
+    ax.figure.canvas.draw()
+    renderer = ax.figure.canvas.get_renderer()
+
     # wires
     for row, q in enumerate(qubit_labels):
         y = -row
@@ -214,7 +281,7 @@ def plot_circuit(
 
         if len(rows) <= 1:
             y = -rows[0]
-            wrapped, fs = _fit_text(ax, item.label, box_w, box_h, base_fontsize, min_fontsize)
+            wrapped, fs = _fit_text(ax, renderer, item.label, box_w, box_h, base_fontsize, min_fontsize)
             # subtle drop shadow for depth, then the box itself
             ax.add_patch(
                 mpatches.FancyBboxPatch(
@@ -246,7 +313,7 @@ def plot_circuit(
             ax.plot([x, x], [y_top, y_bot], color=style.fill, lw=1.6, zorder=1, solid_capstyle="round")
             for row in rows:
                 ax.add_patch(plt.Circle((x, -row), 0.15, facecolor=style.fill, edgecolor="white", lw=1.0, zorder=2))
-            wrapped, fs = _fit_text(ax, item.label, connector_label_width, box_h, base_fontsize, min_fontsize)
+            wrapped, fs = _fit_text(ax, renderer, item.label, connector_label_width, box_h, base_fontsize, min_fontsize)
             ax.text(x + 0.28, (y_top + y_bot) / 2, wrapped, ha="left", va="center", fontsize=fs, zorder=3)
 
     for bx in barrier_xs:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gatefold"
-version = "0.2.0"
+version = "0.3.0"
 description = "Framework-agnostic quantum circuit diagram plotting with matplotlib"
 readme = "README.md"
 license = "MIT"

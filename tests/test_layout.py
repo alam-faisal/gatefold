@@ -13,6 +13,7 @@ from gatefold.core import (
     _default_qubit_order,
     _fit_text,
     _greedy_color,
+    _pack_by_width,
     _pack_layers,
     _span,
     _tokenize_for_wrap,
@@ -105,6 +106,27 @@ def test_tokenize_for_wrap_keeps_mathtext_span_atomic():
     assert _tokenize_for_wrap(r"$a + b$ world") == [r"$a + b$", "world"]
 
 
+def test_pack_by_width_splits_when_a_line_would_exceed_max_width():
+    tokens = ["aaaa", "bbbb", "cccc", "dddd"]
+    widths = [10.0, 10.0, 10.0, 10.0]
+    lines, widest = _pack_by_width(tokens, widths, space_width=2.0, max_width_px=25.0)
+    # "aaaa bbbb" = 10+2+10 = 22 <= 25; adding "cccc" = 22+2+10 = 34 > 25 -> wraps
+    assert lines == ["aaaa bbbb", "cccc dddd"]
+    assert widest == 22.0
+
+
+def test_pack_by_width_keeps_a_single_line_when_everything_fits():
+    lines, widest = _pack_by_width(["short"], [5.0], space_width=2.0, max_width_px=100.0)
+    assert lines == ["short"]
+    assert widest == 5.0
+
+
+def test_pack_by_width_empty_tokens_returns_no_lines():
+    lines, widest = _pack_by_width([], [], space_width=2.0, max_width_px=100.0)
+    assert lines == []
+    assert widest == 0.0
+
+
 def test_wrap_tokens_splits_when_a_line_would_exceed_max_width():
     _, ax = plt.subplots()
     probe = ax.text(0, 0, "", fontsize=10, alpha=0)
@@ -134,8 +156,10 @@ def test_fit_text_wraps_long_text_instead_of_shrinking_past_the_floor():
     _, ax = plt.subplots()
     ax.set_xlim(0, 5)
     ax.set_ylim(0, 5)
+    ax.figure.canvas.draw()
+    renderer = ax.figure.canvas.get_renderer()
     long_label = "a very long label that will not fit on one line at any reasonable size"
-    wrapped, fs = _fit_text(ax, long_label, box_w_data=1.0, box_h_data=2.0, base_fs=12.0, min_fs=8.0)
+    wrapped, fs = _fit_text(ax, renderer, long_label, box_w_data=1.0, box_h_data=2.0, base_fs=12.0, min_fs=8.0)
     assert "\n" in wrapped
     assert fs >= 8.0
     plt.close(ax.figure)
@@ -145,7 +169,9 @@ def test_fit_text_keeps_short_text_on_one_line_at_base_fontsize():
     _, ax = plt.subplots()
     ax.set_xlim(0, 5)
     ax.set_ylim(0, 5)
-    wrapped, fs = _fit_text(ax, "H", box_w_data=0.8, box_h_data=0.7, base_fs=10.0, min_fs=5.0)
+    ax.figure.canvas.draw()
+    renderer = ax.figure.canvas.get_renderer()
+    wrapped, fs = _fit_text(ax, renderer, "H", box_w_data=0.8, box_h_data=0.7, base_fs=10.0, min_fs=5.0)
     assert wrapped == "H"
     assert fs == 10.0
     plt.close(ax.figure)
