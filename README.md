@@ -78,6 +78,12 @@ only place that needs to know about both your package and `gatefold`. This is wh
   different internal logic captured in its own adapter function as long as every branch ends up emitting the
   same valid `list[Layer]`.
 
+## Internals
+
+[`ARCHITECTURE.md`](ARCHITECTURE.md) covers the module layout, the packing
+algorithm, and how text auto-fit keeps large diagrams fast — worth a read
+before changing the layout or drawing code.
+
 ## License
 
 MIT

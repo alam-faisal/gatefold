@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.axes import Axes
+from matplotlib.backend_bases import RendererBase
 
 from .style import Palette, DEFAULT_PALETTE
 
@@ -28,12 +31,9 @@ class Item:
 class Layer:
     """A set of Items packed ASAP; a barrier is drawn after unless it's the last layer.
 
-    Items need not be mutually non-conflicting: if several touch the same qubit, they're
-    packed into consecutive columns (no barrier between them) in the order given -- so that
-    order matters. Items sharing a qubit must appear here in the order they actually need to
-    run; packing can lay out a correctly-ordered sequence, but can't detect or fix one that
-    isn't (same precondition as a resource-respecting list scheduler generally: it schedules
-    from a given valid order, it doesn't discover one).
+    Items may conflict: several touching the same qubit are packed into consecutive columns,
+    with no barrier between them, in the order given. That order is a precondition -- items
+    sharing a qubit must appear here in the order they need to run.
     """
 
     items: list[Item]
@@ -44,28 +44,17 @@ class Layer:
 # --------------------------------------------------------------------------
 
 
-def _greedy_color(items: list, span_of) -> list[int]:
-    """Assign each item the earliest column consistent with every qubit it touches: one past
-    the latest column any of those qubits was last placed in (0 if never placed).
+def _assign_columns(spans: list[tuple[Qubit, ...]]) -> list[int]:
+    """Column for each span: one past the latest column any qubit it covers was last placed
+    in (0 if never placed).
 
-    This is a per-resource next-free-slot scheduler, not interval-graph coloring by lowest
-    available index -- the distinction matters once a layer has more than a couple of
-    conflicts. Column-index-order scanning (try column 0, then 1, ...) can reuse an early
-    column for a later item whenever that *specific* column's history happens not to overlap
-    the item, even though some qubit the item needs was reserved *more recently* in a
-    different column -- silently drawing that item much earlier than it may actually run.
-    Tracking next-free-slot per qubit directly avoids this: a qubit's most recent use is
-    always the single source of truth for when it's next available, regardless of which
-    column that use happened to land in.
-
-    Assumes `items` is already in a valid execution order: two items touching the same qubit
-    must appear here in the order they need to run. This function can pack a correctly-ordered
-    sequence into columns; it can't discover the correct order from an arbitrarily-ordered one.
+    `spans` must already be in a valid execution order -- two items sharing a qubit appear in
+    the order they need to run. See ARCHITECTURE.md for why availability is tracked per qubit
+    rather than per column.
     """
-    next_free: dict[str, int] = {}
+    next_free: dict[Qubit, int] = {}
     assigned = []
-    for item in items:
-        span = set(span_of(item))  # materialized: iterated twice below
+    for span in spans:
         col = max((next_free.get(q, 0) for q in span), default=0)
         assigned.append(col)
         for q in span:
@@ -85,12 +74,15 @@ def _span(qubits: tuple[Qubit, ...], row_of: dict[Qubit, int], qubit_labels: lis
 def _pack_layers(
     layers: list[Layer], qubit_labels: list[Qubit], row_of: dict[Qubit, int]
 ) -> tuple[list[tuple[float, Item]], list[float], float]:
+    """Lay layers out left to right with one unit of barrier gap between consecutive layers.
+
+    Returns (items with their absolute x, barrier x positions, total width).
+    """
     placed: list[tuple[float, Item]] = []
     barrier_xs: list[float] = []
     x = 0.0
     for i, layer in enumerate(layers):
-        spans = [_span(it.qubits, row_of, qubit_labels) for it in layer.items]
-        cols = _greedy_color(list(zip(layer.items, spans)), lambda pair: pair[1])
+        cols = _assign_columns([_span(it.qubits, row_of, qubit_labels) for it in layer.items])
         for it, col in zip(layer.items, cols):
             placed.append((x + col, it))
         width = max((c + 1 for c in cols), default=0)
@@ -101,14 +93,9 @@ def _pack_layers(
     return placed, barrier_xs, x
 
 
-def _default_qubit_order(qubits) -> list[Qubit]:
+def _default_qubit_order(qubits: Iterable[Qubit]) -> list[Qubit]:
     """Sort qubit labels numerically when every one parses as an int (true for essentially
-    every real backend's qubit indices), falling back to lexicographic order otherwise.
-
-    A pure lexicographic sort silently mis-orders any two-digit label -- "10" lands
-    between "1" and "2" -- which is wrong for the overwhelmingly common case of plain
-    integer-indexed qubits.
-    """
+    every real backend's qubit indices), lexicographically otherwise."""
     try:
         return sorted(qubits, key=int)
     except ValueError:
@@ -130,6 +117,13 @@ _WRAP_TOKEN = re.compile(r"\$[^$]*\$|\S+")
 _LATEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
 _LATEX_STRUCTURAL = re.compile(r"[$^_{}]")
 
+# Fraction of the box the text is allowed to occupy (the remainder is inner padding), the
+# spacing between wrapped lines, and the step the fontsize search shrinks by.
+_TEXT_WIDTH_FRAC = 0.92
+_TEXT_HEIGHT_FRAC = 0.85
+_LINE_SPACING = 1.2
+_FONTSIZE_STEP = 0.5
+
 
 def _tokenize_for_wrap(text: str) -> list[str]:
     return _WRAP_TOKEN.findall(text)
@@ -141,18 +135,13 @@ def _estimate_char_count(text: str) -> int:
     return len(_LATEX_STRUCTURAL.sub("", _LATEX_COMMAND.sub("#", text)))
 
 
-def _text_width(probe, renderer, text: str) -> float:
-    probe.set_text(text)
-    return probe.get_window_extent(renderer=renderer).width
-
-
 def _pack_by_width(
     tokens: list[str], widths: list[float], space_width: float, max_width_px: float
 ) -> tuple[list[str], float]:
     """Greedily pack tokens (with precomputed widths) into lines <= max_width_px.
 
-    Returns (lines, widest line's width) -- the caller already has per-token widths, so the
-    widest line's width comes for free without an extra measurement of the joined text.
+    Returns (lines, widest line's width) -- the widest width comes for free from the
+    per-token widths the caller already holds, so no measurement of the joined text is needed.
     """
     lines: list[str] = []
     line_widths: list[float] = []
@@ -173,43 +162,23 @@ def _pack_by_width(
     return lines, (max(line_widths) if line_widths else 0.0)
 
 
-def _wrap_tokens(probe, tokens: list[str], max_width_px: float) -> list[str]:
-    """Greedily pack tokens into lines at probe's current fontsize (a single-fontsize
-    convenience around _pack_by_width; _fit_text itself measures once and reuses linearly
-    scaled widths across every fontsize it tries -- see _fit_text's docstring for why)."""
-    renderer = probe.figure.canvas.get_renderer()
-    if not tokens:
-        return []
-    widths = [_text_width(probe, renderer, tok) for tok in tokens]
-    space_width = _text_width(probe, renderer, " ")
-    lines, _ = _pack_by_width(tokens, widths, space_width, max_width_px)
-    return lines
-
-
 def _fit_text(
-    ax, renderer, text: str, box_w_data: float, box_h_data: float, base_fs: float, min_fs: float = 5.0
+    ax: Axes,
+    renderer: RendererBase,
+    text: str,
+    box_w_data: float,
+    box_h_data: float,
+    base_fs: float,
+    min_fs: float = 5.0,
 ) -> tuple[str, float]:
-    """Find a fontsize in [min_fs, base_fs] at which `text`, wrapped to fit box_w_data, also
-    fits box_h_data -- shrinking font and adding lines together rather than shrinking a single
-    line all the way to min_fs. Always returns something (the min_fs attempt is used even if
-    it still overflows vertically).
+    """Largest fontsize in [min_fs, base_fs] at which `text`, wrapped to fit box_w_data, also
+    fits box_h_data -- shrinking the font and adding lines together. Always returns something
+    (the min_fs attempt is used even if it still overflows vertically).
 
-    Takes an already-obtained `renderer` rather than drawing the canvas itself: plot_circuit
-    calls this once per item, and a fresh fig.canvas.draw() re-renders every artist already
-    placed on the axes so far, making that call alone scale with the number of items already
-    drawn -- one draw() up front in plot_circuit, reused here, avoids that entirely.
-
-    Matplotlib's renderer measures `text` exactly once per call, at base_fs; every token's
-    width (at every candidate fontsize the shrink search tries) is then an estimate --
-    proportional to its visible-glyph count (_estimate_char_count), calibrated against that
-    one real measurement -- not a further renderer call. Sizing here is deliberately
-    approximate, not pixel-exact: profiling found the auto-fit *search* itself (repeatedly
-    asking the renderer to measure candidate strings) costs several times more than actually
-    rendering the text, because each distinct mathtext string triggers matplotlib's
-    font_manager to score every installed system font (slow on a system with many fonts
-    installed, and evidently not fully amortized by matplotlib's own font cache across
-    distinct short strings within one process). One measurement per item, reused via a cheap
-    character-count estimate for every candidate size, avoids nearly all of that cost.
+    Two things here are load-bearing for speed, both explained in ARCHITECTURE.md: `renderer`
+    is supplied by the caller rather than obtained from a canvas draw, and `text` is measured
+    exactly once (at base_fs) with every candidate size's widths scaled arithmetically from
+    that one measurement. Sizing is therefore deliberately approximate, not pixel-exact.
     """
     p0 = ax.transData.transform((0, 0))
     p1 = ax.transData.transform((box_w_data, box_h_data))
@@ -224,17 +193,20 @@ def _fit_text(
     px_per_char_ref = ref_bbox.width / total_chars
     line_height_ref = ref_bbox.height
 
+    max_width_px = box_w_px * _TEXT_WIDTH_FRAC
+    max_height_px = box_h_px * _TEXT_HEIGHT_FRAC
+
     fs = base_fs
     while True:
         scale = fs / base_fs
         px_per_char = px_per_char_ref * scale
         widths = [c * px_per_char for c in token_char_counts]
-        lines, max_line_width = _pack_by_width(tokens, widths, px_per_char, box_w_px * 0.92)
-        total_height = line_height_ref * scale * 1.2 * max(len(lines), 1)
-        if (max_line_width <= box_w_px * 0.92 and total_height <= box_h_px * 0.85) or fs <= min_fs:
+        lines, max_line_width = _pack_by_width(tokens, widths, px_per_char, max_width_px)
+        total_height = line_height_ref * scale * _LINE_SPACING * max(len(lines), 1)
+        if (max_line_width <= max_width_px and total_height <= max_height_px) or fs <= min_fs:
             wrapped = "\n".join(lines)
             break
-        fs -= 0.5
+        fs -= _FONTSIZE_STEP
     probe.remove()
     return wrapped, fs
 
@@ -243,19 +215,27 @@ def _fit_text(
 # Drawing
 # --------------------------------------------------------------------------
 
+_ROW_LABEL_FONTSIZE = 9.5
+_BOX_PAD = 0.02
+_BOX_ROUNDING_FRAC = 0.22  # corner radius as a fraction of box height, so it scales with the box
+_SHADOW_OFFSET = 0.025  # data units, down and to the right
+_SHADOW_ALPHA = 0.08
+_MARKER_RADIUS = 0.15  # connector's per-row marker
+_CONNECTOR_LABEL_GAP = 0.28  # gap between a connector line and its label
+
 
 def plot_circuit(
     layers: list[Layer],
     qubit_labels: list[Qubit] | None = None,
     qubit_display: dict[Qubit, str] | None = None,
     palette: Palette = DEFAULT_PALETTE,
-    ax: plt.Axes | None = None,
+    ax: Axes | None = None,
     figsize: tuple[float, float] | None = None,
     box_size: tuple[float, float] = (0.8, 0.7),
     base_fontsize: float = 10.0,
     min_fontsize: float = 5.0,
     connector_label_width: float = 1.6,
-) -> plt.Axes:
+) -> Axes:
     """Plot a list of Layers. Single-qubit items draw as rounded boxes;
     multi-qubit items draw as a connector line with a marker per touched row.
 
@@ -279,9 +259,9 @@ def plot_circuit(
     ax.set_ylim(-(len(qubit_labels) - 1) - 0.8, 0.8)
     ax.axis("off")
 
-    # Drawn once here rather than inside _fit_text's per-item loop -- a fresh
-    # fig.canvas.draw() re-renders every artist already on the axes, which would make that
-    # call alone scale with the number of items already placed.
+    # One draw for the whole figure, whose renderer every _fit_text call below then reuses.
+    # A draw() per item would re-render every artist already placed, making the loop
+    # quadratic in item count -- see ARCHITECTURE.md.
     ax.figure.canvas.draw()
     renderer = ax.figure.canvas.get_renderer()
 
@@ -289,9 +269,10 @@ def plot_circuit(
     for row, q in enumerate(qubit_labels):
         y = -row
         ax.plot([-0.5, total_width - 0.5], [y, y], color=palette.wire, lw=1.2, zorder=0, solid_capstyle="round")
-        ax.text(-0.85, y, (qubit_display or {}).get(q, q), ha="right", va="center", fontsize=9.5)
+        ax.text(-0.85, y, (qubit_display or {}).get(q, q), ha="right", va="center", fontsize=_ROW_LABEL_FONTSIZE)
 
     box_w, box_h = box_size
+    boxstyle = f"round,pad={_BOX_PAD},rounding_size={box_h * _BOX_ROUNDING_FRAC}"
 
     for x, item in placed:
         style = palette.get(item.style)
@@ -303,12 +284,12 @@ def plot_circuit(
             # subtle drop shadow for depth, then the box itself
             ax.add_patch(
                 mpatches.FancyBboxPatch(
-                    (x - box_w / 2 + 0.025, y - box_h / 2 - 0.025),
+                    (x - box_w / 2 + _SHADOW_OFFSET, y - box_h / 2 - _SHADOW_OFFSET),
                     box_w,
                     box_h,
-                    boxstyle=f"round,pad=0.02,rounding_size={box_h * 0.22}",
+                    boxstyle=boxstyle,
                     facecolor="black",
-                    alpha=0.08,
+                    alpha=_SHADOW_ALPHA,
                     linewidth=0,
                     zorder=1,
                 )
@@ -318,7 +299,7 @@ def plot_circuit(
                     (x - box_w / 2, y - box_h / 2),
                     box_w,
                     box_h,
-                    boxstyle=f"round,pad=0.02,rounding_size={box_h * 0.22}",
+                    boxstyle=boxstyle,
                     facecolor=style.fill,
                     edgecolor=style.edge,
                     linewidth=0,
@@ -330,9 +311,15 @@ def plot_circuit(
             y_top, y_bot = -rows[0], -rows[-1]
             ax.plot([x, x], [y_top, y_bot], color=style.fill, lw=1.6, zorder=1, solid_capstyle="round")
             for row in rows:
-                ax.add_patch(plt.Circle((x, -row), 0.15, facecolor=style.fill, edgecolor="white", lw=1.0, zorder=2))
-            wrapped, fs = _fit_text(ax, renderer, item.label, connector_label_width, box_h, base_fontsize, min_fontsize)
-            ax.text(x + 0.28, (y_top + y_bot) / 2, wrapped, ha="left", va="center", fontsize=fs, zorder=3)
+                ax.add_patch(
+                    plt.Circle((x, -row), _MARKER_RADIUS, facecolor=style.fill, edgecolor="white", lw=1.0, zorder=2)
+                )
+            wrapped, fs = _fit_text(
+                ax, renderer, item.label, connector_label_width, box_h, base_fontsize, min_fontsize
+            )
+            ax.text(
+                x + _CONNECTOR_LABEL_GAP, (y_top + y_bot) / 2, wrapped, ha="left", va="center", fontsize=fs, zorder=3
+            )
 
     for bx in barrier_xs:
         ax.plot(

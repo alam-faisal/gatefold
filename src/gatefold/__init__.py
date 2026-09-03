@@ -8,6 +8,8 @@ try:
 except PackageNotFoundError:
     __version__ = "unknown"
 
+del PackageNotFoundError, version  # keep the namespace to the public API
+
 __all__ = [
     "Item",
     "Layer",

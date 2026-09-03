@@ -1,9 +1,5 @@
 """Smoke tests: plot_circuit runs and returns an Axes. Doesn't check pixel output."""
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 
 from gatefold import Item, Layer, plot_circuit

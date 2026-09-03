@@ -1,59 +1,43 @@
 """Layout unit tests: column assignment, span calculation, qubit ordering, and text
 wrapping -- not visual correctness."""
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 
 from gatefold.core import (
     Item,
     Layer,
+    _assign_columns,
     _default_qubit_order,
     _fit_text,
-    _greedy_color,
     _pack_by_width,
     _pack_layers,
     _span,
     _tokenize_for_wrap,
-    _wrap_tokens,
 )
 
 
-def test_greedy_color_overlapping_spans_get_different_columns():
-    # both items touch qubit "b" -> can't share a column
-    items = ["a-b", "b-c"]
-    spans = {"a-b": {"a", "b"}, "b-c": {"b", "c"}}
-    cols = _greedy_color(items, lambda it: spans[it])
-    assert cols == [0, 1]
+def test_assign_columns_overlapping_spans_get_different_columns():
+    # both spans cover qubit "b" -> can't share a column
+    assert _assign_columns([("a", "b"), ("b", "c")]) == [0, 1]
 
 
-def test_greedy_color_disjoint_spans_share_a_column():
-    # disjoint qubit sets -> both fit in column 0
-    items = ["a", "c"]
-    spans = {"a": {"a"}, "c": {"c"}}
-    cols = _greedy_color(items, lambda it: spans[it])
-    assert cols == [0, 0]
+def test_assign_columns_disjoint_spans_share_a_column():
+    assert _assign_columns([("a",), ("c",)]) == [0, 0]
 
 
-def test_greedy_color_tracks_most_recent_conflict_not_just_column_history():
-    # g1 touches A,B. g2 touches P,Q (disjoint from g1 -> shares g1's column). g3 touches
+def test_assign_columns_empty_span_lands_in_column_zero():
+    assert _assign_columns([()]) == [0]
+
+
+def test_assign_columns_tracks_most_recent_conflict_not_just_column_history():
+    # g1 covers A,B. g2 covers P,Q (disjoint from g1 -> shares g1's column). g3 covers
     # P,E (P conflicts with g2's column -> pushed to a new column, seeding it with {P,E}).
-    # g4 touches B,E (B conflicts g1's column, E conflicts g3's column -> pushed further,
-    # carrying B's block forward). g5 touches A,B again and must wait for g4 (shares B),
+    # g4 covers B,E (B conflicts g1's column, E conflicts g3's column -> pushed further,
+    # carrying B's block forward). g5 covers A,B again and must wait for g4 (shares B),
     # not just g1 -- a column-history scanner that only checks "has *this* column ever seen
     # A or B" would wrongly let g5 reuse g3's column, since g3's column never saw A/B itself.
-    items = ["g1", "g2", "g3", "g4", "g5"]
-    spans = {
-        "g1": {"A", "B"},
-        "g2": {"P", "Q"},
-        "g3": {"P", "E"},
-        "g4": {"B", "E"},
-        "g5": {"A", "B"},
-    }
-    cols = _greedy_color(items, lambda it: spans[it])
-    assert cols == [0, 0, 1, 2, 3]
+    spans = [("A", "B"), ("P", "Q"), ("P", "E"), ("B", "E"), ("A", "B")]
+    assert _assign_columns(spans) == [0, 0, 1, 2, 3]
 
 
 def test_span_single_qubit():
@@ -144,29 +128,6 @@ def test_pack_by_width_empty_tokens_returns_no_lines():
     lines, widest = _pack_by_width([], [], space_width=2.0, max_width_px=100.0)
     assert lines == []
     assert widest == 0.0
-
-
-def test_wrap_tokens_splits_when_a_line_would_exceed_max_width():
-    _, ax = plt.subplots()
-    probe = ax.text(0, 0, "", fontsize=10, alpha=0)
-    ax.figure.canvas.draw()
-    # first measure the width of all four tokens on one line, then force a wrap
-    # by giving _wrap_tokens a budget narrower than that
-    renderer = ax.figure.canvas.get_renderer()
-    probe.set_text("aaaa bbbb cccc dddd")
-    full_width = probe.get_window_extent(renderer=renderer).width
-    lines = _wrap_tokens(probe, ["aaaa", "bbbb", "cccc", "dddd"], full_width * 0.6)
-    assert len(lines) > 1
-    plt.close(ax.figure)
-
-
-def test_wrap_tokens_keeps_a_single_line_when_it_already_fits():
-    _, ax = plt.subplots()
-    probe = ax.text(0, 0, "", fontsize=10, alpha=0)
-    ax.figure.canvas.draw()
-    lines = _wrap_tokens(probe, ["short"], max_width_px=10_000)
-    assert lines == ["short"]
-    plt.close(ax.figure)
 
 
 def test_fit_text_wraps_long_text_instead_of_shrinking_past_the_floor():

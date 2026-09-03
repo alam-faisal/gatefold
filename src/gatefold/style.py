@@ -24,6 +24,7 @@ class Palette:
     barrier: str = "#9AA1A9"
 
     def get(self, key: str) -> StyleSpec:
+        """Style for `key`, falling back to the "default" entry, which must exist."""
         return self.styles.get(key, self.styles["default"])
 
 
@@ -34,16 +35,16 @@ def _readable_text(fill: str) -> str:
     return "black" if luminance > 0.6 else "white"
 
 
-# Fills sampled from the plasma colormap; text color picked per-swatch since
-# plasma spans dark purple to bright yellow. Swap in your own for house
-# style / brand colors.
+def _plasma_swatch(frac: float) -> StyleSpec:
+    """Fill sampled from plasma at `frac`, with text color picked to contrast against it."""
+    fill = to_hex(cm.plasma(frac))
+    return StyleSpec(fill=fill, text=_readable_text(fill))
+
+
+# Text color is picked per swatch because plasma spans dark purple to bright
+# yellow. Swap in your own Palette for house style / brand colors.
 _PLASMA_FRACTIONS = {"default": 0.15, "single": 0.5, "multi": 0.8}
-DEFAULT_PALETTE = Palette(
-    styles={
-        name: StyleSpec(fill=(fill := to_hex(cm.plasma(frac))), text=_readable_text(fill))
-        for name, frac in _PLASMA_FRACTIONS.items()
-    }
-)
+DEFAULT_PALETTE = Palette(styles={name: _plasma_swatch(frac) for name, frac in _PLASMA_FRACTIONS.items()})
 
 
 def set_clean_rcparams() -> None:
