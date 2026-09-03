@@ -37,6 +37,25 @@ def test_greedy_color_disjoint_spans_share_a_column():
     assert cols == [0, 0]
 
 
+def test_greedy_color_tracks_most_recent_conflict_not_just_column_history():
+    # g1 touches A,B. g2 touches P,Q (disjoint from g1 -> shares g1's column). g3 touches
+    # P,E (P conflicts with g2's column -> pushed to a new column, seeding it with {P,E}).
+    # g4 touches B,E (B conflicts g1's column, E conflicts g3's column -> pushed further,
+    # carrying B's block forward). g5 touches A,B again and must wait for g4 (shares B),
+    # not just g1 -- a column-history scanner that only checks "has *this* column ever seen
+    # A or B" would wrongly let g5 reuse g3's column, since g3's column never saw A/B itself.
+    items = ["g1", "g2", "g3", "g4", "g5"]
+    spans = {
+        "g1": {"A", "B"},
+        "g2": {"P", "Q"},
+        "g3": {"P", "E"},
+        "g4": {"B", "E"},
+        "g5": {"A", "B"},
+    }
+    cols = _greedy_color(items, lambda it: spans[it])
+    assert cols == [0, 0, 1, 2, 3]
+
+
 def test_span_single_qubit():
     row_of = {"q0": 0, "q1": 1, "q2": 2}
     labels = ["q0", "q1", "q2"]

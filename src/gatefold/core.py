@@ -26,32 +26,50 @@ class Item:
 
 @dataclass(frozen=True)
 class Layer:
-    """A set of Items packed ASAP; a barrier is drawn after unless it's the last layer."""
+    """A set of Items packed ASAP; a barrier is drawn after unless it's the last layer.
+
+    Items need not be mutually non-conflicting: if several touch the same qubit, they're
+    packed into consecutive columns (no barrier between them) in the order given -- so that
+    order matters. Items sharing a qubit must appear here in the order they actually need to
+    run; packing can lay out a correctly-ordered sequence, but can't detect or fix one that
+    isn't (same precondition as a resource-respecting list scheduler generally: it schedules
+    from a given valid order, it doesn't discover one).
+    """
 
     items: list[Item]
 
 
 # --------------------------------------------------------------------------
-# Layout: greedy interval coloring + ASAP packing
+# Layout: greedy list scheduling + ASAP packing
 # --------------------------------------------------------------------------
 
 
 def _greedy_color(items: list, span_of) -> list[int]:
-    """Assign each item the smallest column index whose reservation doesn't
-    overlap its span. O(n^2) but n per layer is always small for circuit diagrams.
+    """Assign each item the earliest column consistent with every qubit it touches: one past
+    the latest column any of those qubits was last placed in (0 if never placed).
+
+    This is a per-resource next-free-slot scheduler, not interval-graph coloring by lowest
+    available index -- the distinction matters once a layer has more than a couple of
+    conflicts. Column-index-order scanning (try column 0, then 1, ...) can reuse an early
+    column for a later item whenever that *specific* column's history happens not to overlap
+    the item, even though some qubit the item needs was reserved *more recently* in a
+    different column -- silently drawing that item much earlier than it may actually run.
+    Tracking next-free-slot per qubit directly avoids this: a qubit's most recent use is
+    always the single source of truth for when it's next available, regardless of which
+    column that use happened to land in.
+
+    Assumes `items` is already in a valid execution order: two items touching the same qubit
+    must appear here in the order they need to run. This function can pack a correctly-ordered
+    sequence into columns; it can't discover the correct order from an arbitrarily-ordered one.
     """
-    cols: list[set[str]] = []
+    next_free: dict[str, int] = {}
     assigned = []
     for item in items:
-        span = set(span_of(item))
-        for c, taken in enumerate(cols):
-            if not (taken & span):
-                taken |= span
-                assigned.append(c)
-                break
-        else:
-            cols.append(set(span))
-            assigned.append(len(cols) - 1)
+        span = set(span_of(item))  # materialized: iterated twice below
+        col = max((next_free.get(q, 0) for q in span), default=0)
+        assigned.append(col)
+        for q in span:
+            next_free[q] = col + 1
     return assigned
 
 
