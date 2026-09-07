@@ -124,6 +124,25 @@ def test_pack_by_width_keeps_a_single_line_when_everything_fits():
     assert widest == 5.0
 
 
+def test_pack_by_width_oversized_token_overflows_instead_of_being_split():
+    # a token wider than the whole budget takes a line to itself and exceeds it, which is what
+    # _fit_text reads as "wrapping can't help here, shrink the font". Checks the packing
+    # arithmetic only -- not that _fit_text actually acts on the overflow.
+    lines, widest = _pack_by_width(["enormous"], [500.0], space_width=2.0, max_width_px=25.0)
+    assert lines == ["enormous"]
+    assert widest == 500.0
+
+
+def test_pack_by_width_oversized_token_does_not_absorb_its_neighbours():
+    # the overflowing token neither swallows the tokens around it nor is merged into their
+    # lines -- surrounding tokens still pack normally
+    lines, widest = _pack_by_width(
+        ["aa", "enormous", "bb"], [10.0, 500.0, 10.0], space_width=2.0, max_width_px=25.0
+    )
+    assert lines == ["aa", "enormous", "bb"]
+    assert widest == 500.0
+
+
 def test_pack_by_width_empty_tokens_returns_no_lines():
     lines, widest = _pack_by_width([], [], space_width=2.0, max_width_px=100.0)
     assert lines == []

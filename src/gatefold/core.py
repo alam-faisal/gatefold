@@ -20,7 +20,7 @@ Qubit = str
 
 @dataclass(frozen=True)
 class Item:
-    """One drawable thing: a gate, a term, whatever. `style` keys into a Palette."""
+    """One drawable thing: a gate, a term, etc. `style` keys into a Palette."""
 
     qubits: tuple[Qubit, ...]
     label: str
@@ -31,26 +31,23 @@ class Item:
 class Layer:
     """A set of Items packed ASAP; a barrier is drawn after unless it's the last layer.
 
-    Items may conflict: several touching the same qubit are packed into consecutive columns,
-    with no barrier between them, in the order given. That order is a precondition -- items
-    sharing a qubit must appear here in the order they need to run.
+    Items may conflict: several touching the same qubit are drawn in consecutive columns,
+    with no barrier between them, in the order given. 
     """
 
     items: list[Item]
 
 
 # --------------------------------------------------------------------------
-# Layout: greedy list scheduling + ASAP packing
+# Layout: ASAP column assignment within each layer, layers concatenated left to right
 # --------------------------------------------------------------------------
 
 
 def _assign_columns(spans: list[tuple[Qubit, ...]]) -> list[int]:
-    """Column for each span: one past the latest column any qubit it covers was last placed
-    in (0 if never placed).
+    """Column for each item, given its span: the labels of the qubit it spans.
 
-    `spans` must already be in a valid execution order -- two items sharing a qubit appear in
-    the order they need to run. See ARCHITECTURE.md for why availability is tracked per qubit
-    rather than per column.
+    An item takes the earliest column free on every qubit in its span -- one past the latest
+    column any of them was last placed in (0 if never placed).
     """
     next_free: dict[Qubit, int] = {}
     assigned = []
@@ -63,8 +60,8 @@ def _assign_columns(spans: list[tuple[Qubit, ...]]) -> list[int]:
 
 
 def _span(qubits: tuple[Qubit, ...], row_of: dict[Qubit, int], qubit_labels: list[Qubit]) -> tuple[Qubit, ...]:
-    """Rows an item visually crosses (inclusive), for collision purposes —
-    a line between two non-adjacent rows blocks every row in between."""
+    """Qubits an item visually crosses (inclusive), for collision purposes —
+    a line between two non-adjacent qubits blocks every qubit in between."""
     if not qubits:
         return ()
     rows = [row_of[q] for q in qubits]
@@ -138,10 +135,10 @@ def _estimate_char_count(text: str) -> int:
 def _pack_by_width(
     tokens: list[str], widths: list[float], space_width: float, max_width_px: float
 ) -> tuple[list[str], float]:
-    """Greedily pack tokens (with precomputed widths) into lines <= max_width_px.
+    """Greedily pack tokens into lines, breaking before any token that would exceed max_width_px.
 
-    Returns (lines, widest line's width) -- the widest width comes for free from the
-    per-token widths the caller already holds, so no measurement of the joined text is needed.
+    Returns (lines, widest line's width). A token wider than max_width_px gets a line to itself
+    and overflows it, which is the signal _fit_text shrinks the font on -- see ARCHITECTURE.md.
     """
     lines: list[str] = []
     line_widths: list[float] = []
@@ -175,10 +172,10 @@ def _fit_text(
     fits box_h_data -- shrinking the font and adding lines together. Always returns something
     (the min_fs attempt is used even if it still overflows vertically).
 
-    Two things here are load-bearing for speed, both explained in ARCHITECTURE.md: `renderer`
+    Two decisions motivated by speed, both explained in ARCHITECTURE.md: `renderer`
     is supplied by the caller rather than obtained from a canvas draw, and `text` is measured
     exactly once (at base_fs) with every candidate size's widths scaled arithmetically from
-    that one measurement. Sizing is therefore deliberately approximate, not pixel-exact.
+    that one measurement. Sizing is therefore deliberately approximate.
     """
     p0 = ax.transData.transform((0, 0))
     p1 = ax.transData.transform((box_w_data, box_h_data))
@@ -237,7 +234,7 @@ def plot_circuit(
     connector_label_width: float = 1.6,
 ) -> Axes:
     """Plot a list of Layers. Single-qubit items draw as rounded boxes;
-    multi-qubit items draw as a connector line with a marker per touched row.
+    multi-qubit items draw as a connector line with a marker per touched qubit.
 
     Long labels wrap across multiple lines before shrinking below min_fontsize --
     a label that doesn't fit on one line at any fontsize down to min_fontsize gets
