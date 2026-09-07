@@ -9,7 +9,7 @@ description = "Framework-agnostic quantum circuit diagram plotting with matplotl
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-authors = [{ name = "Faisal Alam", email = "mfalam2@illinois.edu" }]
+authors = [{ name = "Faisal Alam", email = "qubitfaisal@gmail.com" }]
 keywords = ["quantum", "quantum-computing", "circuit-diagram", "matplotlib", "visualization"]
 classifiers = [
     "Development Status :: 4 - Beta",
