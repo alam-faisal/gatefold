@@ -1,0 +1,54 @@
+name: Publish to PyPI
+
+# Runs on a version tag push, e.g. `git tag -a v0.3.2 -m v0.3.2 && git push origin v0.3.2`.
+# Publishing uses PyPI Trusted Publishing (OIDC), so there is no API token stored anywhere.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # A tag that disagrees with pyproject.toml would publish under the wrong
+      # version, and PyPI releases cannot be replaced. Fail before building.
+      - name: Tag must match the version in pyproject.toml
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)"
+          echo "tag=$tag_version pyproject=$pkg_version"
+          test "$tag_version" = "$pkg_version"
+
+      - name: Run tests
+        run: uv run --extra dev pytest -q
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Gate the release on the `pypi` environment. Add required reviewers to it
+    # in repo Settings if you want to approve each publish by hand.
+    environment: pypi
+    permissions:
+      id-token: write # required for Trusted Publishing; nothing else is needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
