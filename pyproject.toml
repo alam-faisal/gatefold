@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gatefold"
-version = "0.3.2"
+version = "1.0.0"
 description = "Framework-agnostic quantum circuit diagram plotting with matplotlib"
 readme = "README.md"
 license = "MIT"
@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [{ name = "Faisal Alam", email = "qubitfaisal@gmail.com" }]
 keywords = ["quantum", "quantum-computing", "circuit-diagram", "matplotlib", "visualization"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",

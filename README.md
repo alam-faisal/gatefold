@@ -84,6 +84,16 @@ only place that needs to know about both your package and `gatefold`. This is wh
 algorithm, and how text auto-fit keeps large diagrams fast — worth a read
 before changing the layout or drawing code.
 
+## Versioning
+
+Semantic versioning. The public API is the seven names re-exported from
+`gatefold` — `Item`, `Layer`, `Palette`, `StyleSpec`, `DEFAULT_PALETTE`,
+`plot_circuit`, `set_clean_rcparams` — and it will not break without a major
+version bump. Everything in `gatefold.core` / `gatefold.style` is internal.
+`plot_circuit`'s options are keyword-only, so new ones can be added without
+breaking callers. Exact rendered output is not covered by this promise:
+diagrams may change appearance in a minor release.
+
 ## License
 
 MIT

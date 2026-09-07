@@ -223,6 +223,7 @@ _CONNECTOR_LABEL_GAP = 0.28  # gap between a connector line and its label
 
 def plot_circuit(
     layers: list[Layer],
+    *,
     qubit_labels: list[Qubit] | None = None,
     qubit_display: dict[Qubit, str] | None = None,
     palette: Palette = DEFAULT_PALETTE,

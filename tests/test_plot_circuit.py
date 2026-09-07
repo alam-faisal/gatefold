@@ -1,6 +1,7 @@
 """Smoke tests: plot_circuit runs and returns an Axes. Doesn't check pixel output."""
 
 import matplotlib.pyplot as plt
+import pytest
 
 from gatefold import Item, Layer, plot_circuit
 
@@ -41,3 +42,12 @@ def test_long_label_wraps_across_multiple_lines_instead_of_only_shrinking():
     ax = plot_circuit(layers, box_size=(0.8, 0.7))
     rendered = [t.get_text() for t in ax.texts if t.get_text() and "\n" in t.get_text()]
     assert rendered, "expected the long label to be wrapped onto multiple lines"
+
+
+def test_options_are_keyword_only():
+    # everything after `layers` is keyword-only, so the parameter order is not part of the
+    # public API and options can be added later without a major bump. Checks the signature
+    # contract, not any rendering behaviour.
+    layers = [Layer(items=[Item(("q0",), "X")])]
+    with pytest.raises(TypeError):
+        plot_circuit(layers, ["q0"])
